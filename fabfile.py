@@ -148,12 +148,13 @@ def provision():
 
 def setup_nginx_site():
     nginx_site = SITE_SETTINGS['nginx_site']
+    static_dir = SITE_SETTINGS['repo_dir']
     upload_template('nginx_site.conf',
         '/etc/nginx/sites-available/%s' % nginx_site,
         context={
             'server_name': SITE_SETTINGS['server_name'],
-            'path_to_static': join(SITE_DIR, 'static'),
-            'static_parent': '%s/' % SITE_DIR,
+            'path_to_static': join(static_dir, 'static'),
+            'static_parent': '%s/' % static_dir,
         },
         use_jinja=True, use_sudo=True, template_dir=TEMPLATE_DIR)
     require.nginx.enabled(nginx_site)
@@ -166,11 +167,12 @@ def setup_supervisor():
     upload_template('supervised_site.conf',
         '/etc/supervisor/conf.d/%s.conf' % supervised_process,
         context={
+            'supervised_process': supervised_process,
             'command': join(bindir, 'gunicorn.sh'),
             'user': SITE_SETTINGS['user'],
             'group': SITE_SETTINGS['group'],
             'logfile': join(logdir, 'gunicorn.log'),
-
+            'site_dir': bindir,
         },
         use_jinja=True, use_sudo=True, template_dir=TEMPLATE_DIR)
     supervisor.update_config()
