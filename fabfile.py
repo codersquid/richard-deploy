@@ -139,11 +139,11 @@ def provision():
     setup_database()
     setup_site_user()
     setup_site_root()
-    setup_secrets()
-    #provision_django()
+    #setup_secrets()
+    provision_django()
     setup_nginx_site()
     setup_supervisor()
-    print("MANUAL STEPS: pip install psycopg2, syncdb and migrate, collectstatic")
+    print("MANUAL STEPS: pip install psycopg2, finish local settings, syncdb and migrate, collectstatic")
 
 
 def setup_nginx_site():
