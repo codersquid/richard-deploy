@@ -7,40 +7,59 @@ deploy: deploys a version of the site. if no git ref is provided, deploys HEAD.
 provision: provisions a box to run the site. is not idempotent. do not rerun.
 git ref: a git branch, hash, tag
 
+provision: provisions a new box.
+
 example usages:
 
 deploy new version of the site with an updated virtualenv.
 $ fab deploy:1.1.1
 
+
+WARNINGS
+
+This does not set up elasticsearch or the cron jobs for indexing and running
+the link checker.
+
+deploy has never been properly tested
+
+provision is no longer properly tested, Carl wanted an vagrant example
+and I don't have time to finish this today. It's a start for him to pick
+up, unless I get to it first.
+
 """
 import string, random
 from os.path import join, dirname, abspath
-from fabric.api import run, task, env, cd, sudo
+from fabric.api import run, task, env, cd, sudo, local
 from fabric.contrib.files import sed, append
 from fabtools import require, supervisor, postgres, files
 from fabtools.files import upload_template
 import fabtools
 
 env.disable_known_hosts = True
-env.hosts = ['162.242.247.20:2222']
+env.user = 'vagrant'
+env.hosts = ['127.0.0.1:2222']
+# for vagrant
+env.key_filename = local('vagrant ssh-config | grep IdentityFile | cut -f4 -d " "', capture=True)
 
 FAB_HOME = dirname(abspath(__file__))
 TEMPLATE_DIR = join(FAB_HOME, 'templates')
-
 SITE_DIR = join('/', 'srv', 'writethedocs')
-SITE_CLONE_NAME = 'wtd'
+
 SITE_SETTINGS = {
-    'repo_dir': join(SITE_DIR, SITE_CLONE_NAME),
+    'repo_dir': join(SITE_DIR, 'richard'),
     'setup_args': '.[postgresql]',
-    'repo': 'https://github.com/willkg/richard.git',
+    #'repo': 'https://github.com/willkg/richard.git',
+    'repo': 'https://github.com/paulcollinsiii/richard.git',
     'user': 'richard',
     'group': 'richard',
     'supervised_process': 'writethedocs',
     'virtualenv': 'venv',
-    'settings_module': 'wtd.richard.settings',
-    'wsgi_module': 'wtd.richard.wsgi',
-    'server_name': '.writethedocs.org',
-    'nginx_site': 'writethedocs',
+    #'settings_module': 'wtd.richard.settings',
+    'settings_module': 'richard.settings',
+    #'wsgi_module': 'wtd.richard.wsgi',
+    'wsgi_module': 'richard.wsgi',
+    'server_name': 'writethedocs.org',
+    'django_site_url': 'http://video.writethedocs.org',
 }
 
 
@@ -53,7 +72,7 @@ def uname():
 
 @task
 def deploy(version_tag=None):
-    """deploys a new version of the site with a new virtualenv
+    """deploys a new version of the site
 
     version_tag: a git tag, defaults to HEAD
     """
@@ -63,7 +82,7 @@ def deploy(version_tag=None):
     stop(supervised_process)
     update(commit=version_tag)
     setup()
-    #collectstatic()
+    collectstatic()
     start(supervised_process)
     #undust()
 
@@ -82,19 +101,13 @@ def start(process_name):
     supervisor.start_process(process_name)
 
 
-def clone_site():
-    with cd(SITE_DIR):
-        su('git clone %s %s' % (SITE_SETTINGS['repo'], SITE_CLONE_NAME))
-    with cd(join(SITE_DIR, SITE_CLONE_NAME)):
-        su('touch __init__.py') # janky way to treat the SITE_CLONE_NAME like a module name
-
-
 @task
 def update(commit='origin/master'):
     repo_dir = SITE_SETTINGS['repo_dir']
 
     if not files.is_dir(repo_dir):
-        clone_site()
+        with cd(SITE_DIR):
+            su('git clone %s' % SITE_SETTINGS['repo'])
 
     with cd(repo_dir):
         su('git fetch')
@@ -109,9 +122,8 @@ def migrate(app):
         vsu('./manage.py migrate %s' % app)
 
 
-
 @task
-def provision():
+def provision(commit='origin/master'):
     """Run only once to provision a new host.
     This is not idempotent. Only run once!
     """
@@ -119,18 +131,18 @@ def provision():
     install_python_packages()
     lockdown_nginx()
     lockdown_ssh()
-    setup_database()
+    # Use if you want a postgres db rather than sqlite
+    # TODO you'll also need to change the django settings
+    #setup_database()
     setup_site_user()
     setup_site_root()
-    #setup_secrets()
-    provision_django()
+    provision_django(commit)
     setup_nginx_site()
     setup_supervisor()
-    print("MANUAL STEPS: finish local settings, syncdb and migrate, collectstatic")
 
 
 def setup_nginx_site():
-    nginx_site = SITE_SETTINGS['nginx_site']
+    nginx_site = 'richard'
     static_dir = SITE_SETTINGS['repo_dir']
     upload_template('nginx_site.conf',
         '/etc/nginx/sites-available/%s' % nginx_site,
@@ -173,12 +185,27 @@ def lockdown_ssh():
     sudo('service ssh restart')
 
 
-def provision_django():
-    su('virtualenv %s' % SITE_SETTINGS['virtualenv'])
-    clone_site()
-    setup()
-    #collectstatic()
-    #syncdb()
+def provision_django(commit='origin/master'):
+    with cd(SITE_DIR):
+        su('virtualenv %s' % SITE_SETTINGS['virtualenv'])
+        update(commit)
+        setup()
+        provision_django_settings()
+        collectstatic()
+        syncdb()
+
+def provision_django_settings():
+    #cpy settings_local.py-dist
+    secret = randomstring(64)
+    with cd(join(SITE_SETTINGS['repo_dir'], 'richard')):
+        su('cp settings_local.py-dist settings_local.py')
+        # TODO inadequately secure. it will get echoed to stdout
+        # one thing I've seen people do is
+        # echo export SECRET_KEY=\"`dd if=/dev/urandom bs=512 count=1 | tr -dc 'a-zA-Z0-9~@#%^&*-_'`\" >> bin/environment.sh
+        sed('settings_local.py', 'secret', secret)
+        # TODO sed: couldn't open temporary file ./sedrMyp5L: Permission denied
+        # I screwed up permissions. fix this. I'm checking it in for Carl to look at for now.
+        sed('settings_local.py', 'http://127.0.0.1:8000', SITE_SETTINGS['django_site_url'])
 
 
 def syncdb():
@@ -193,7 +220,7 @@ def setup(virtualenv='venv'):
         #vsu("python setup.py '%s'" % SITE_SETTINGS['setup_args'], virtualenv=virtualenv)
         vsu("python setup.py install", virtualenv=virtualenv)
         vsu("pip install gunicorn", virtualenv=virtualenv)
-        vsu("pip install psycopg2", virtualenv=virtualenv)
+        #vsu("pip install psycopg2", virtualenv=virtualenv)
 
 
 def setup_database():
@@ -254,6 +281,8 @@ def install_packages():
         'python-software-properties',
         'python-dev',
         'build-essential',
+        'libxml2',
+        'libxslt-dev',
         'git',
         'nginx-extras',
         'libxslt1-dev',
@@ -301,4 +330,3 @@ def collectstatic():
 
 def randomstring(n):
     return ''.join(random.choice(string.ascii_letters + string.digits + '~@#%^&*-_') for x in range(n))
-
