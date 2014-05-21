@@ -21,26 +21,31 @@ from fabtools import require, supervisor, postgres, files
 from fabtools.files import upload_template
 import fabtools
 
+from fabtools.vagrant import vagrant
+
 env.disable_known_hosts = True
-env.hosts = ['162.242.247.20:2222']
+# env.hosts = ['162.242.247.20:2222']
+env.hosts = ['localhost']
 
 FAB_HOME = dirname(abspath(__file__))
 TEMPLATE_DIR = join(FAB_HOME, 'templates')
 
-SITE_DIR = join('/', 'srv', 'writethedocs')
-SITE_CLONE_NAME = 'wtd'
+SITE_NAME = "ps1"
+SITE_CLONE_NAME = SITE_NAME
+
+SITE_DIR = join('/', 'srv', SITE_NAME) 
 SITE_SETTINGS = {
     'repo_dir': join(SITE_DIR, SITE_CLONE_NAME),
     'setup_args': '.[postgresql]',
     'repo': 'https://github.com/willkg/richard.git',
-    'user': 'richard',
-    'group': 'richard',
-    'supervised_process': 'writethedocs',
+    'user': SITE_NAME,  
+    'group': SITE_NAME,
     'virtualenv': 'venv',
-    'settings_module': 'wtd.richard.settings',
-    'wsgi_module': 'wtd.richard.wsgi',
-    'server_name': '.writethedocs.org',
-    'nginx_site': 'writethedocs',
+    'supervised_process': SITE_NAME,
+    'settings_module': '{0}.richard.settings'.format(SITE_NAME) , 
+    'wsgi_module': '{0}.richard.wsgi'.format(SITE_NAME), 
+    'server_name': 'videos.pumpintstationone.org',
+    'nginx_site': SITE_NAME,
 }
 
 
@@ -92,10 +97,6 @@ def clone_site():
 @task
 def update(commit='origin/master'):
     repo_dir = SITE_SETTINGS['repo_dir']
-
-    if not files.is_dir(repo_dir):
-        clone_site()
-
     with cd(repo_dir):
         su('git fetch')
         su('git checkout %s' % commit)
@@ -122,8 +123,8 @@ def provision():
     setup_database()
     setup_site_user()
     setup_site_root()
-    #setup_secrets()
     provision_django()
+    provision_django_settings()
     setup_nginx_site()
     setup_supervisor()
     print("MANUAL STEPS: finish local settings, syncdb and migrate, collectstatic")
@@ -174,12 +175,29 @@ def lockdown_ssh():
 
 
 def provision_django():
-    su('virtualenv %s' % SITE_SETTINGS['virtualenv'])
+
+    with cd(SITE_DIR):
+        su('virtualenv {0}'.format(SITE_SETTINGS['virtualenv']))
     clone_site()
     setup()
     #collectstatic()
     #syncdb()
 
+
+def provision_django_settings():
+
+    upload_template('settings_local.py',
+        join(SITE_DIR, SITE_SETTINGS['repo_dir'], 
+            'richard', 'settings_local.py'),
+        context={
+            'db_name': SITE_NAME,
+            'secret_key': ''.join(random.choice(string.ascii_letters + string.digits + '~@#%^&*-_') for x in range(64))
+        },
+        use_jinja=True, use_sudo=True, template_dir=TEMPLATE_DIR)
+
+
+    # what is this?
+    # sed('settings_local.py', 'http://127.0.0.1:8000', SITE_SETTINGS['django_site_url'])
 
 def syncdb():
     with cd(SITE_SETTINGS['repo_dir']):
@@ -222,7 +240,7 @@ def setup_site_root():
     sudo('chown %s:%s %s' % (user, user, SITE_DIR))
 
     with cd(SITE_DIR):
-        su('mkdir -p logs bin')
+        su('mkdir -p logs bin {0}'.format(SITE_SETTINGS['virtualenv']))
 
     with cd(bindir):
         setup_gunicorn_script()
@@ -291,7 +309,7 @@ def vsu(cmd, virtualenv='venv', user=None):
     if user is None:
         user = SITE_SETTINGS['user']
     activate = join(SITE_DIR, virtualenv, 'bin', 'activate')
-    sudo("su %s -c 'source %s; %s'" % (user, activate, cmd))
+    sudo("su {0} -c 'source {1}; {2}'".format(user, activate, cmd))
 
 
 def collectstatic():
