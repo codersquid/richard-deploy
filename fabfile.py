@@ -3,14 +3,14 @@ with credit to scipy-2014 and researchcompendia fabric.py
 
 fab <deploy|provision>[:<git ref>]
 
-deploy: deploys a version of the site. if no git ref is provided, deploys HEAD.
 provision: provisions a box to run the site. is not idempotent. do not rerun.
+deploy: deploys a update to the site. if no git ref is provided, deploys HEAD.
 git ref: a git branch, hash, tag
 
 example usages:
 
 deploy new version of the site with an updated virtualenv.
-$ fab deploy:1.1.1
+$ fab provision:1.1.1
 
 """
 import string, random
@@ -24,8 +24,8 @@ import fabtools
 from fabtools.vagrant import vagrant
 
 env.disable_known_hosts = True
-# env.hosts = ['162.242.247.20:2222']
-env.hosts = ['localhost']
+# env.hosts = ['localhost']
+env.hosts = ['root@test.pyohio.nextdayvideo.com']
 
 FAB_HOME = dirname(abspath(__file__))
 TEMPLATE_DIR = join(FAB_HOME, 'templates')
@@ -125,9 +125,18 @@ def provision():
     setup_site_root()
     provision_django()
     provision_django_settings()
+    syncdb()
+    collectstatic()
     setup_nginx_site()
     setup_supervisor()
-    print("MANUAL STEPS: finish local settings, syncdb and migrate, collectstatic")
+
+    print("handy debugging stuff:")
+    print("cd /srv/ps1/")
+    print("curl http://{0}:8000".format(SITE_SETTINGS['server_name']))
+    print("curl --head http://{0}:8000".format(SITE_SETTINGS['server_name']))
+    print("sudo supervisorctl restart ps1")
+    print("cat /srv/ps1/logs/gunicorn.log")
+    print("")
 
 
 def setup_nginx_site():
@@ -186,15 +195,23 @@ def provision_django():
 
 def provision_django_settings():
 
+    settings_local = join(SITE_DIR, SITE_SETTINGS['repo_dir'], 
+            'richard', 'settings_local.py')
+
+    secret_key = ''.join(random.choice(string.ascii_letters + 
+                string.digits + '~@#%^&*-_') for x in range(64))
+
     upload_template('settings_local.py',
-        join(SITE_DIR, SITE_SETTINGS['repo_dir'], 
-            'richard', 'settings_local.py'),
+        settings_local,
         context={
             'db_name': SITE_NAME,
-            'secret_key': ''.join(random.choice(string.ascii_letters + string.digits + '~@#%^&*-_') for x in range(64))
+            'secret_key': secret_key,
+            'server_name': SITE_SETTINGS['server_name'],
         },
         use_jinja=True, use_sudo=True, template_dir=TEMPLATE_DIR)
 
+    sudo('chown {user}:{group} {file}'.format( 
+        file=settings_local, **SITE_SETTINGS ))
 
     # what is this?
     # sed('settings_local.py', 'http://127.0.0.1:8000', SITE_SETTINGS['django_site_url'])

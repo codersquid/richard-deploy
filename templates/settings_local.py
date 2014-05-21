@@ -9,11 +9,13 @@ DEBUG = False
 
 SECRET_KEY = '{{ secret_key }}'
 
+ALLOWED_HOSTS = ['{{server_name}}']
+
 DATABASES = {
     'default': {
         # postgresql configuration
         'ENGINE': 'django.db.backends.postgresql_psycopg2',
-        'NAME': '{{site_name}}',    # db name
+        'NAME': '{{db_name}}',    
         # 'USER': '{{site_name}}',
         # 'PASSWORD': 'richard',
         # 'HOST': 'localhost',
