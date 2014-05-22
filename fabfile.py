@@ -44,7 +44,7 @@ SITE_SETTINGS = {
     'supervised_process': SITE_NAME,
     'settings_module': '{0}.richard.settings'.format(SITE_NAME) , 
     'wsgi_module': '{0}.richard.wsgi'.format(SITE_NAME), 
-    'server_name': 'videos.pumpintstationone.org',
+    'server_name': 'videos.pumpingstationone.org',
     'nginx_site': SITE_NAME,
 }
 
