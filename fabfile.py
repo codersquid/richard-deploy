@@ -61,7 +61,10 @@ SITE_SETTINGS = {
     'server_name': SERVER_NAME, 
     'nginx_site': SITE_NAME,
     'gunicorn_port':'8001',
+    'admin_user':'carl',
+    'admin_email':'carl@nextdayvideo.com',
 }
+
 
 env.disable_known_hosts = True
 
@@ -114,7 +117,6 @@ def update(commit='origin/master'):
         su('git fetch')
         su('git checkout %s' % commit)
 
-
 @task
 def migrate(app):
     """ run south migration on specified app
@@ -131,19 +133,20 @@ def provision(commit='origin/master'):
     install_packages()
     install_python_packages()
     lockdown_nginx()
-    # lockdown_ssh()
+    # lockdown_ssh() # locks you out if you don't have keys setup
     setup_database()
     setup_site_user()
     setup_site_root()
     provision_django()
     provision_django_settings()
     syncdb()
+    create_superuser()
     collectstatic()
     setup_nginx_site()
     setup_supervisor()
 
+    print("")
     print('handy debugging stuff:')
-    print('cd {0}'.format(SITE_DIR))
     print('127.0.0.1    localhost {server_name}'.format(
         **SITE_SETTINGS))
     print('curl http://{server_name}:8081'.format(
@@ -153,7 +156,12 @@ def provision(commit='origin/master'):
         **SITE_SETTINGS))
     print("sudo supervisorctl restart {0}".format(SITE_NAME))
     print('cat {0}/logs/gunicorn.log'.format(SITE_DIR))
-    print("")
+
+    activate = join(
+            SITE_DIR, SITE_SETTINGS['virtualenv'], 'bin', 'activate')
+    print('cd {repo_dir}'.format(**SITE_SETTINGS))
+    print( 'sudo su {user} -c "source {activate} && ./manage.py shell"'.format(activate=activate, **SITE_SETTINGS))
+
 
 
 def setup_nginx_site():
@@ -239,6 +247,15 @@ def provision_django_settings():
 def syncdb():
     with cd(SITE_SETTINGS['repo_dir']):
         vsu('./manage.py syncdb --noinput --migrate')
+
+
+@task
+def create_superuser():
+    """ create admin user. 
+    richard uses Persona, which is tied to email.
+    """
+    with cd(SITE_SETTINGS['repo_dir']):
+        vsu('./manage.py createsuperuser --noinput --username {admin_user} --email {admin_email}'.format(**SITE_SETTINGS))
 
 
 @task
