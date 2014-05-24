@@ -11,6 +11,8 @@ SECRET_KEY = '{{ secret_key }}'
 
 ALLOWED_HOSTS = ['{{server_name}}']
 
+BROWSERID_AUDIENCES = ['http://{{server_name}}', ] 
+
 DATABASES = {
     'default': {
         # postgresql configuration
