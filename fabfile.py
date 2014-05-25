@@ -3,8 +3,8 @@ with credit to scipy-2014 and researchcompendia fabric.py
 
 fab <deploy|provision>[:<git ref>]
 
-deploy: deploys a version of the site. if no git ref is provided, deploys HEAD.
 provision: provisions a box to run the site. is not idempotent. do not rerun.
+deploy: deploys a update to the site. if no git ref is provided, deploys HEAD.
 git ref: a git branch, hash, tag
 
 provision: provisions a new box.
@@ -12,7 +12,7 @@ provision: provisions a new box.
 example usages:
 
 deploy new version of the site with an updated virtualenv.
-$ fab deploy:1.1.1
+$ fab provision:1.1.1
 
 
 WARNINGS
@@ -35,32 +35,42 @@ from fabtools import require, supervisor, postgres, files
 from fabtools.files import upload_template
 import fabtools
 
-env.disable_known_hosts = True
-env.user = 'vagrant'
-env.hosts = ['127.0.0.1:2222']
-# for vagrant
-env.key_filename = local('vagrant ssh-config | grep IdentityFile | cut -f4 -d " "', capture=True)
+from fabtools.vagrant import vagrant
 
 FAB_HOME = dirname(abspath(__file__))
 TEMPLATE_DIR = join(FAB_HOME, 'templates')
-SITE_DIR = join('/', 'srv', 'writethedocs')
 
+# shourt name - user, group, db name, supervised_process...
+SITE_NAME = "ps1"
+# public facing name (connonical?  fqdn?)
+SERVER_NAME='videos.pumpingstationone.org'
+SITE_CLONE_NAME = SITE_NAME
+
+SITE_DIR = join('/', 'srv', SITE_NAME) 
 SITE_SETTINGS = {
-    'repo_dir': join(SITE_DIR, 'richard'),
+    'repo_dir': join(SITE_DIR, SITE_NAME),
     'setup_args': '.[postgresql]',
-    #'repo': 'https://github.com/willkg/richard.git',
-    'repo': 'https://github.com/paulcollinsiii/richard.git',
-    'user': 'richard',
-    'group': 'richard',
-    'supervised_process': 'writethedocs',
+    'django_site_url': 'http://{0}'.format(SERVER_NAME),
+    'repo': 'https://github.com/willkg/richard.git',
+    'user': SITE_NAME,  
+    'group': SITE_NAME,
     'virtualenv': 'venv',
-    #'settings_module': 'wtd.richard.settings',
-    'settings_module': 'richard.settings',
-    #'wsgi_module': 'wtd.richard.wsgi',
-    'wsgi_module': 'richard.wsgi',
-    'server_name': 'writethedocs.org',
-    'django_site_url': 'http://video.writethedocs.org',
+    'supervised_process': SITE_NAME,
+    'settings_module': '{0}.richard.settings'.format(SITE_NAME) , 
+    'wsgi_module': '{0}.richard.wsgi'.format(SITE_NAME), 
+    'server_name': SERVER_NAME, 
+    'nginx_site': SITE_NAME,
+    'gunicorn_port':'8001',
+    'admin_user':'carl',
+    'admin_email':'carl@nextdayvideo.com',
 }
+
+
+env.disable_known_hosts = True
+
+env.hosts = [SERVER_NAME+':2222']
+#env.hosts = ['127.0.0.1:2222']
+#env.hosts = ['root@test.pyohio.nextdayvideo.com']
 
 
 @task
@@ -72,7 +82,7 @@ def uname():
 
 @task
 def deploy(version_tag=None):
-    """deploys a new version of the site
+    """deploys a updated version of the site
 
     version_tag: a git tag, defaults to HEAD
     """
@@ -100,19 +110,12 @@ def start(process_name):
     """
     supervisor.start_process(process_name)
 
-
 @task
 def update(commit='origin/master'):
     repo_dir = SITE_SETTINGS['repo_dir']
-
-    if not files.is_dir(repo_dir):
-        with cd(SITE_DIR):
-            su('git clone %s' % SITE_SETTINGS['repo'])
-
     with cd(repo_dir):
         su('git fetch')
         su('git checkout %s' % commit)
-
 
 @task
 def migrate(app):
@@ -130,25 +133,47 @@ def provision(commit='origin/master'):
     install_packages()
     install_python_packages()
     lockdown_nginx()
-    lockdown_ssh()
-    # Use if you want a postgres db rather than sqlite
-    # TODO you'll also need to change the django settings
-    #setup_database()
+    # lockdown_ssh() # locks you out if you don't have keys setup
+    setup_database()
     setup_site_user()
     setup_site_root()
-    provision_django(commit)
+    provision_django()
+    provision_django_settings()
+    syncdb()
+    create_superuser()
+    collectstatic()
     setup_nginx_site()
     setup_supervisor()
 
+    print("")
+    print('handy debugging stuff:')
+    print('127.0.0.1    localhost {server_name}'.format(
+        **SITE_SETTINGS))
+    print('curl http://{server_name}:8081'.format(
+        **SITE_SETTINGS))
+        # not the gunicorn_port. this is the port mapped to 80 by vagrant
+    print('curl --head http://{server_name}:8081'.format(
+        **SITE_SETTINGS))
+    print("sudo supervisorctl restart {0}".format(SITE_NAME))
+    print('cat {0}/logs/gunicorn.log'.format(SITE_DIR))
+
+    activate = join(
+            SITE_DIR, SITE_SETTINGS['virtualenv'], 'bin', 'activate')
+    print('cd {repo_dir}'.format(**SITE_SETTINGS))
+    print( 'sudo su {user} -c "source {activate} && ./manage.py shell"'.format(activate=activate, **SITE_SETTINGS))
+
+
 
 def setup_nginx_site():
-    nginx_site = 'richard'
+    nginx_site = SITE_NAME
     static_dir = SITE_SETTINGS['repo_dir']
     upload_template('nginx_site.conf',
         '/etc/nginx/sites-available/%s' % nginx_site,
         context={
             'server_name': SITE_SETTINGS['server_name'],
+            'gunicorn_port': SITE_SETTINGS['gunicorn_port'],
             'path_to_static': join(static_dir, 'static'),
+            'site_dir': SITE_DIR,
             'static_parent': '%s/' % static_dir,
         },
         use_jinja=True, use_sudo=True, template_dir=TEMPLATE_DIR)
@@ -185,27 +210,38 @@ def lockdown_ssh():
     sudo('service ssh restart')
 
 
-def provision_django(commit='origin/master'):
+def clone_site():
     with cd(SITE_DIR):
-        su('virtualenv %s' % SITE_SETTINGS['virtualenv'])
-        update(commit)
-        setup()
-        provision_django_settings()
-        collectstatic()
-        syncdb()
+        su('git clone -q %s %s' % (SITE_SETTINGS['repo'], SITE_CLONE_NAME))
+    with cd(join(SITE_DIR, SITE_CLONE_NAME)):
+        su('touch __init__.py') # janky way to treat the SITE_CLONE_NAME like a module name
+
+
+def provision_django():
+    with cd(SITE_DIR):
+        su('virtualenv {0}'.format(SITE_SETTINGS['virtualenv']))
+    clone_site()
+    setup()
+
 
 def provision_django_settings():
-    #cpy settings_local.py-dist
-    secret = randomstring(64)
-    with cd(join(SITE_SETTINGS['repo_dir'], 'richard')):
-        su('cp settings_local.py-dist settings_local.py')
-        # TODO inadequately secure. it will get echoed to stdout
-        # one thing I've seen people do is
-        # echo export SECRET_KEY=\"`dd if=/dev/urandom bs=512 count=1 | tr -dc 'a-zA-Z0-9~@#%^&*-_'`\" >> bin/environment.sh
-        sed('settings_local.py', 'secret', secret)
-        # TODO sed: couldn't open temporary file ./sedrMyp5L: Permission denied
-        # I screwed up permissions. fix this. I'm checking it in for Carl to look at for now.
-        sed('settings_local.py', 'http://127.0.0.1:8000', SITE_SETTINGS['django_site_url'])
+    settings_local = join(SITE_DIR, SITE_SETTINGS['repo_dir'], 
+            'richard', 'settings_local.py')
+
+    secret_key = ''.join(random.choice(string.ascii_letters + 
+                string.digits + '~@#%^&*-_') for x in range(64))
+
+    upload_template('settings_local.py',
+        settings_local,
+        context={
+            'db_name': SITE_NAME,
+            'secret_key': secret_key,
+            'server_name': SITE_SETTINGS['server_name'],
+        },
+        use_jinja=True, use_sudo=True, template_dir=TEMPLATE_DIR)
+
+    sudo('chown {user}:{group} {file}'.format( 
+        file=settings_local, **SITE_SETTINGS ))
 
 
 def syncdb():
@@ -214,13 +250,23 @@ def syncdb():
 
 
 @task
+def create_superuser():
+    """ create admin user. 
+    richard uses Persona, which is tied to email.
+    """
+    with cd(SITE_SETTINGS['repo_dir']):
+        vsu('./manage.py createsuperuser --noinput --username {admin_user} --email {admin_email}'.format(**SITE_SETTINGS))
+
+
+@task
 def setup(virtualenv='venv'):
+
     with cd(SITE_SETTINGS['repo_dir']):
         # TODO: figure out how to escape .[postgresql], I keep getting: invalid command name
         #vsu("python setup.py '%s'" % SITE_SETTINGS['setup_args'], virtualenv=virtualenv)
         vsu("python setup.py install", virtualenv=virtualenv)
         vsu("pip install gunicorn", virtualenv=virtualenv)
-        #vsu("pip install psycopg2", virtualenv=virtualenv)
+        vsu("pip install psycopg2", virtualenv=virtualenv)
 
 
 def setup_database():
@@ -249,7 +295,7 @@ def setup_site_root():
     sudo('chown %s:%s %s' % (user, user, SITE_DIR))
 
     with cd(SITE_DIR):
-        su('mkdir -p logs bin')
+        su('mkdir -p logs bin {0}'.format(SITE_SETTINGS['virtualenv']))
 
     with cd(bindir):
         setup_gunicorn_script()
@@ -270,6 +316,7 @@ def setup_gunicorn_script():
             'group': SITE_SETTINGS['group'],
             'site_dir': SITE_DIR,
             'wsgi_module': SITE_SETTINGS['wsgi_module'],
+            'gunicorn_port': SITE_SETTINGS['gunicorn_port'],
             'python_path': python_path,
         },
         use_jinja=True, use_sudo=True, template_dir=TEMPLATE_DIR)
@@ -300,7 +347,7 @@ def install_packages():
 
 
 def install_python_packages():
-    sudo('wget https://raw.github.com/pypa/pip/master/contrib/get-pip.py')
+    sudo('wget --quiet https://raw.github.com/pypa/pip/master/contrib/get-pip.py')
     sudo('python get-pip.py')
     # install global python packages
     require.python.packages([
@@ -320,7 +367,7 @@ def vsu(cmd, virtualenv='venv', user=None):
     if user is None:
         user = SITE_SETTINGS['user']
     activate = join(SITE_DIR, virtualenv, 'bin', 'activate')
-    sudo("su %s -c 'source %s; %s'" % (user, activate, cmd))
+    sudo("su {0} -c 'source {1}; {2}'".format(user, activate, cmd))
 
 
 def collectstatic():
