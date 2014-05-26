@@ -20,5 +20,5 @@ exec ${VIRTUALENV}/bin/gunicorn {{ wsgi_module }}:application \
     --user=$USER \
     --group=$GROUP \
     --pythonpath {{ python_path }} \
-    --bind localhost:8000 \
+    --bind localhost:{{ gunicorn_port }} \
     --log-level=debug

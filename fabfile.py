@@ -7,15 +7,29 @@ provision: provisions a box to run the site. is not idempotent. do not rerun.
 deploy: deploys a update to the site. if no git ref is provided, deploys HEAD.
 git ref: a git branch, hash, tag
 
+provision: provisions a new box.
+
 example usages:
 
 deploy new version of the site with an updated virtualenv.
 $ fab provision:1.1.1
 
+
+WARNINGS
+
+This does not set up elasticsearch or the cron jobs for indexing and running
+the link checker.
+
+deploy has never been properly tested
+
+provision is no longer properly tested, Carl wanted an vagrant example
+and I don't have time to finish this today. It's a start for him to pick
+up, unless I get to it first.
+
 """
 import string, random
 from os.path import join, dirname, abspath
-from fabric.api import run, task, env, cd, sudo
+from fabric.api import run, task, env, cd, sudo, local
 from fabric.contrib.files import sed, append
 from fabtools import require, supervisor, postgres, files
 from fabtools.files import upload_template
@@ -23,20 +37,20 @@ import fabtools
 
 from fabtools.vagrant import vagrant
 
-env.disable_known_hosts = True
-# env.hosts = ['localhost']
-env.hosts = ['root@test.pyohio.nextdayvideo.com']
-
 FAB_HOME = dirname(abspath(__file__))
 TEMPLATE_DIR = join(FAB_HOME, 'templates')
 
+# shourt name - user, group, db name, supervised_process...
 SITE_NAME = "ps1"
+# public facing name (connonical?  fqdn?)
+SERVER_NAME='videos.pumpingstationone.org'
 SITE_CLONE_NAME = SITE_NAME
 
 SITE_DIR = join('/', 'srv', SITE_NAME) 
 SITE_SETTINGS = {
-    'repo_dir': join(SITE_DIR, SITE_CLONE_NAME),
+    'repo_dir': join(SITE_DIR, SITE_NAME),
     'setup_args': '.[postgresql]',
+    'django_site_url': 'http://{0}'.format(SERVER_NAME),
     'repo': 'https://github.com/willkg/richard.git',
     'user': SITE_NAME,  
     'group': SITE_NAME,
@@ -44,9 +58,19 @@ SITE_SETTINGS = {
     'supervised_process': SITE_NAME,
     'settings_module': '{0}.richard.settings'.format(SITE_NAME) , 
     'wsgi_module': '{0}.richard.wsgi'.format(SITE_NAME), 
-    'server_name': 'videos.pumpingstationone.org',
+    'server_name': SERVER_NAME, 
     'nginx_site': SITE_NAME,
+    'gunicorn_port':'8001',
+    'admin_user':'carl',
+    'admin_email':'carl@nextdayvideo.com',
 }
+
+
+env.disable_known_hosts = True
+
+env.hosts = [SERVER_NAME+':2222']
+#env.hosts = ['127.0.0.1:2222']
+#env.hosts = ['root@test.pyohio.nextdayvideo.com']
 
 
 @task
@@ -58,7 +82,7 @@ def uname():
 
 @task
 def deploy(version_tag=None):
-    """deploys a new version of the site with a new virtualenv
+    """deploys a updated version of the site
 
     version_tag: a git tag, defaults to HEAD
     """
@@ -68,7 +92,7 @@ def deploy(version_tag=None):
     stop(supervised_process)
     update(commit=version_tag)
     setup()
-    #collectstatic()
+    collectstatic()
     start(supervised_process)
     #undust()
 
@@ -86,21 +110,12 @@ def start(process_name):
     """
     supervisor.start_process(process_name)
 
-
-def clone_site():
-    with cd(SITE_DIR):
-        su('git clone %s %s' % (SITE_SETTINGS['repo'], SITE_CLONE_NAME))
-    with cd(join(SITE_DIR, SITE_CLONE_NAME)):
-        su('touch __init__.py') # janky way to treat the SITE_CLONE_NAME like a module name
-
-
 @task
 def update(commit='origin/master'):
     repo_dir = SITE_SETTINGS['repo_dir']
     with cd(repo_dir):
         su('git fetch')
         su('git checkout %s' % commit)
-
 
 @task
 def migrate(app):
@@ -110,43 +125,55 @@ def migrate(app):
         vsu('./manage.py migrate %s' % app)
 
 
-
 @task
-def provision():
+def provision(commit='origin/master'):
     """Run only once to provision a new host.
     This is not idempotent. Only run once!
     """
     install_packages()
     install_python_packages()
     lockdown_nginx()
-    lockdown_ssh()
+    # lockdown_ssh() # locks you out if you don't have keys setup
     setup_database()
     setup_site_user()
     setup_site_root()
     provision_django()
     provision_django_settings()
     syncdb()
+    create_superuser()
     collectstatic()
     setup_nginx_site()
     setup_supervisor()
 
-    print("handy debugging stuff:")
-    print("cd /srv/ps1/")
-    print("curl http://{0}:8000".format(SITE_SETTINGS['server_name']))
-    print("curl --head http://{0}:8000".format(SITE_SETTINGS['server_name']))
-    print("sudo supervisorctl restart ps1")
-    print("cat /srv/ps1/logs/gunicorn.log")
     print("")
+    print('handy debugging stuff:')
+    print('127.0.0.1    localhost {server_name}'.format(
+        **SITE_SETTINGS))
+    print('curl http://{server_name}:8081'.format(
+        **SITE_SETTINGS))
+        # not the gunicorn_port. this is the port mapped to 80 by vagrant
+    print('curl --head http://{server_name}:8081'.format(
+        **SITE_SETTINGS))
+    print("sudo supervisorctl restart {0}".format(SITE_NAME))
+    print('cat {0}/logs/gunicorn.log'.format(SITE_DIR))
+
+    activate = join(
+            SITE_DIR, SITE_SETTINGS['virtualenv'], 'bin', 'activate')
+    print('cd {repo_dir}'.format(**SITE_SETTINGS))
+    print( 'sudo su {user} -c "source {activate} && ./manage.py shell"'.format(activate=activate, **SITE_SETTINGS))
+
 
 
 def setup_nginx_site():
-    nginx_site = SITE_SETTINGS['nginx_site']
+    nginx_site = SITE_NAME
     static_dir = SITE_SETTINGS['repo_dir']
     upload_template('nginx_site.conf',
         '/etc/nginx/sites-available/%s' % nginx_site,
         context={
             'server_name': SITE_SETTINGS['server_name'],
+            'gunicorn_port': SITE_SETTINGS['gunicorn_port'],
             'path_to_static': join(static_dir, 'static'),
+            'site_dir': SITE_DIR,
             'static_parent': '%s/' % static_dir,
         },
         use_jinja=True, use_sudo=True, template_dir=TEMPLATE_DIR)
@@ -183,18 +210,21 @@ def lockdown_ssh():
     sudo('service ssh restart')
 
 
-def provision_django():
+def clone_site():
+    with cd(SITE_DIR):
+        su('git clone -q %s %s' % (SITE_SETTINGS['repo'], SITE_CLONE_NAME))
+    with cd(join(SITE_DIR, SITE_CLONE_NAME)):
+        su('touch __init__.py') # janky way to treat the SITE_CLONE_NAME like a module name
 
+
+def provision_django():
     with cd(SITE_DIR):
         su('virtualenv {0}'.format(SITE_SETTINGS['virtualenv']))
     clone_site()
     setup()
-    #collectstatic()
-    #syncdb()
 
 
 def provision_django_settings():
-
     settings_local = join(SITE_DIR, SITE_SETTINGS['repo_dir'], 
             'richard', 'settings_local.py')
 
@@ -213,8 +243,6 @@ def provision_django_settings():
     sudo('chown {user}:{group} {file}'.format( 
         file=settings_local, **SITE_SETTINGS ))
 
-    # what is this?
-    # sed('settings_local.py', 'http://127.0.0.1:8000', SITE_SETTINGS['django_site_url'])
 
 def syncdb():
     with cd(SITE_SETTINGS['repo_dir']):
@@ -222,7 +250,17 @@ def syncdb():
 
 
 @task
+def create_superuser():
+    """ create admin user. 
+    richard uses Persona, which is tied to email.
+    """
+    with cd(SITE_SETTINGS['repo_dir']):
+        vsu('./manage.py createsuperuser --noinput --username {admin_user} --email {admin_email}'.format(**SITE_SETTINGS))
+
+
+@task
 def setup(virtualenv='venv'):
+
     with cd(SITE_SETTINGS['repo_dir']):
         # TODO: figure out how to escape .[postgresql], I keep getting: invalid command name
         #vsu("python setup.py '%s'" % SITE_SETTINGS['setup_args'], virtualenv=virtualenv)
@@ -278,6 +316,7 @@ def setup_gunicorn_script():
             'group': SITE_SETTINGS['group'],
             'site_dir': SITE_DIR,
             'wsgi_module': SITE_SETTINGS['wsgi_module'],
+            'gunicorn_port': SITE_SETTINGS['gunicorn_port'],
             'python_path': python_path,
         },
         use_jinja=True, use_sudo=True, template_dir=TEMPLATE_DIR)
@@ -289,6 +328,8 @@ def install_packages():
         'python-software-properties',
         'python-dev',
         'build-essential',
+        'libxml2',
+        'libxslt-dev',
         'git',
         'nginx-extras',
         'libxslt1-dev',
@@ -306,7 +347,7 @@ def install_packages():
 
 
 def install_python_packages():
-    sudo('wget https://raw.github.com/pypa/pip/master/contrib/get-pip.py')
+    sudo('wget --quiet https://raw.github.com/pypa/pip/master/contrib/get-pip.py')
     sudo('python get-pip.py')
     # install global python packages
     require.python.packages([
@@ -336,4 +377,3 @@ def collectstatic():
 
 def randomstring(n):
     return ''.join(random.choice(string.ascii_letters + string.digits + '~@#%^&*-_') for x in range(n))
-
