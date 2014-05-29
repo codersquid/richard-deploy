@@ -41,13 +41,21 @@ FAB_HOME = dirname(abspath(__file__))
 TEMPLATE_DIR = join(FAB_HOME, 'templates')
 
 # shourt name - user, group, db name, supervised_process...
-SITE_NAME = "ps1"
+SITE_NAME = "rt1"
 # public facing name (connonical?  fqdn?)
-SERVER_NAME='videos.pumpingstationone.org'
+SERVER_NAME='richard.test1.nextdayvideo.com'
+
+try:
+    from secrets import admins
+except:
+    # you will need to run ./manage.py createsuperuser
+    admins = []
+
 SITE_CLONE_NAME = SITE_NAME
 
 SITE_DIR = join('/', 'srv', SITE_NAME) 
 SITE_SETTINGS = {
+    'site_name': SITE_NAME,  
     'repo_dir': join(SITE_DIR, SITE_NAME),
     'setup_args': '.[postgresql]',
     'django_site_url': 'http://{0}'.format(SERVER_NAME),
@@ -61,14 +69,14 @@ SITE_SETTINGS = {
     'server_name': SERVER_NAME, 
     'nginx_site': SITE_NAME,
     'gunicorn_port':'8001',
-    'admin_user':'carl',
-    'admin_email':'carl@nextdayvideo.com',
+    'admins':admins
 }
 
 
 env.disable_known_hosts = True
 
-env.hosts = [SERVER_NAME+':2222']
+env.hosts = ['root@'+SERVER_NAME]
+# env.hosts = [SERVER_NAME+':2222']
 #env.hosts = ['127.0.0.1:2222']
 #env.hosts = ['root@test.pyohio.nextdayvideo.com']
 
@@ -223,7 +231,7 @@ def provision_django():
     clone_site()
     setup()
 
-
+@task
 def provision_django_settings():
     settings_local = join(SITE_DIR, SITE_SETTINGS['repo_dir'], 
             'richard', 'settings_local.py')
@@ -234,8 +242,10 @@ def provision_django_settings():
     upload_template('settings_local.py',
         settings_local,
         context={
+            'site_name': SITE_NAME,
             'db_name': SITE_NAME,
             'secret_key': secret_key,
+            'admins': SITE_SETTINGS['admins'],
             'server_name': SITE_SETTINGS['server_name'],
         },
         use_jinja=True, use_sudo=True, template_dir=TEMPLATE_DIR)
@@ -255,7 +265,8 @@ def create_superuser():
     richard uses Persona, which is tied to email.
     """
     with cd(SITE_SETTINGS['repo_dir']):
-        vsu('./manage.py createsuperuser --noinput --username {admin_user} --email {admin_email}'.format(**SITE_SETTINGS))
+        for user,email in SITE_SETTINGS['admins']:
+            vsu('./manage.py createsuperuser --noinput --username {user} --email {email}'.format(user=user,email=email))
 
 
 @task
