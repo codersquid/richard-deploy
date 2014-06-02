@@ -7,22 +7,23 @@
 
 DEBUG = False
 
+SITE_TITLE = u'{{ site_name }}'
+
+ADMINS = {{ admins }}
+
 SECRET_KEY = '{{ secret_key }}'
 
-ALLOWED_HOSTS = ['{{server_name}}']
+ALLOWED_HOSTS = ['{{server_name}}',]
 
-BROWSERID_AUDIENCES = ['http://{{server_name}}', 'http://{{server_name}}:8081', ] 
+BROWSERID_AUDIENCES = ['http://{{server_name}}', 
+                      # 8081 is for testing in vagrant:
+                       'http://{{server_name}}:8081', ] 
 
 DATABASES = {
     'default': {
         # postgresql configuration
         'ENGINE': 'django.db.backends.postgresql_psycopg2',
         'NAME': '{{db_name}}',    
-        # 'USER': '{{site_name}}',
-        # 'PASSWORD': 'richard',
-        # 'HOST': 'localhost',
-        # 'PORT': ''
-
     }
 }
 
