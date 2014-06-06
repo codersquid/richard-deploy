@@ -5,11 +5,8 @@ to play with for a pyvideo site.
 
 * This does not set up elasticsearch or the cron jobs for indexing and running the link checker.
 * `deploy` is not tested
-* `provision` is broken, Carl wanted an vagrant example and I don't have time
-  to finish this today. It's a start for him to pick up, unless I get to it
-  first.
-
-I'll update this soon.
+* @codersquid does not enjoy writing fabfiles and is learning about ansible and enjoying writing playbooks. go see how things
+  progress here https://github.com/codersquid/pyvideo-playbook
 
 ## Directory structure
 
