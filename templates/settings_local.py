@@ -11,6 +11,8 @@ SITE_TITLE = u'{{ site_name }}'
 
 ADMINS = {{ admins }}
 
+API = True
+
 SECRET_KEY = '{{ secret_key }}'
 
 ALLOWED_HOSTS = ['{{server_name}}',]
