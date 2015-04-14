@@ -1,12 +1,9 @@
-This repo contains yet another refactoring of some fabric scripts for Carl
-to play with for a pyvideo site.
 
 ## WARNINGS
 
-* This does not set up elasticsearch or the cron jobs for indexing and running the link checker.
-* `deploy` is not tested
-* @codersquid does not enjoy writing fabfiles and is learning about ansible and enjoying writing playbooks. go see how things
-  progress here https://github.com/codersquid/pyvideo-playbook
+I am not maintaining this repo. For deploying pyvideo, I maintain
+* https://github.com/pyvideo/pyvideo-deploy
+* https://github.com/pyvideo/richard-ansible
 
 ## Directory structure
 
